@@ -67,6 +67,9 @@ else
 endif
 
 ifeq ($(RUST_BUILD_STD_ONLY),y)
+  ifeq ($(strip $(RUST_SRC_COMPONENT_SUM)),)
+    $(error rust: missing rust-src checksum; update lang/rust/rust-values.mk)
+  endif
   HOST_BUILD_DEPENDS+=python3/host
 endif
 

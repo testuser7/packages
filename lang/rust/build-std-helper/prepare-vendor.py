@@ -89,8 +89,13 @@ def main():
         if package_source != "registry+https://github.com/rust-lang/crates.io-index":
             fail(f"unsupported Cargo.lock source for {package['name']}: {package_source}")
         checksum = package.get("checksum")
-        if not checksum:
-            fail(f"missing checksum in Cargo.lock for {package['name']} {package['version']}")
+        if not checksum or len(checksum) != 64 or any(
+            character not in "0123456789abcdef" for character in checksum
+        ):
+            fail(
+                f"invalid SHA-256 checksum in Cargo.lock for "
+                f"{package['name']} {package['version']}"
+            )
         packages[(package["name"], package["version"])] = checksum
 
     if not packages:
