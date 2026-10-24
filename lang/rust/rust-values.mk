@@ -172,4 +172,7 @@ RUST_STD_SUM_X86_64_UNKNOWN_LINUX_MUSL:=1dd241eaeb19ff3b5180461c77bdee93d6cafc66
 
 RUST_STD_SUM:=$(RUST_STD_SUM_$(call toupper,$(subst -,_,$(RUSTC_TARGET_ARCH))))
 
+# Rust source component hash from channel-rust-1.99.1.toml xz_hash
+RUST_SRC_COMPONENT_SUM:=e485a88c45db546b73571df7bebfcb4454ba4fb552c492e25fc5b00eeb5bf22d
+
 RUST_SRC_HASH:=6451598a99e77f07571960f6b21d577399d3a30f33e80cbd2e3a4aae6535d265

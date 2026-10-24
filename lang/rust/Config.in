@@ -13,37 +13,24 @@ config RUST_SCCACHE_DIR
 	  If not set, uses './.sccache'
 
 config RUST_USE_PREBUILT_BINARIES
-	bool "Use prebuilt Rust binaries for host"
+	bool "Use prebuilt Rust binaries and target std when available"
 	default y
 	help
-	  Use official prebuilt Rust binaries for the host toolchain on supported
-	  platforms (Linux x86_64/arm64, macOS x86_64/arm64). The host libc is
-	  auto-detected and the matching binary (glibc or musl) is selected
-	  automatically. This significantly reduces build time by avoiding a
-	  full source compilation. Disable this to force building from source
-	  (e.g. for unsupported hosts or reproducibility).
+	  Use official prebuilt Rust host binaries and, when available, the
+	  matching target standard library. Host libc and target triple are
+	  auto-detected. Disable this to build the complete Rust toolchain
+	  from source.
 
-config RUST_USE_PREBUILT_STD
-	bool "Use prebuilt Rust standard library for target"
-	default y
+config RUST_BUILD_STD_ONLY_WITH_PREBUILT_BINARIES
+	bool "Build only target std from source when using prebuilt Rust binaries"
+	default n
 	depends on RUST_USE_PREBUILT_BINARIES
 	help
-	  Use official prebuilt rust-std binaries for the target toolchain on
-	  supported platforms and ABI configurations. The target triple is
-	  auto-detected from the OpenWrt target configuration. Disable this
-	  option to build the Rust toolchain from source.
-
-config RUST_BUILD_STD_FROM_SOURCE
-	bool "Build Rust toolchain from source if prebuilt target std is unavailable"
-	default n
-	depends on RUST_USE_PREBUILT_BINARIES && RUST_USE_PREBUILT_STD
-	help
-	  If no compatible prebuilt target standard library is available, build
-	  the complete Rust toolchain from the pinned source archive instead of
-	  mixing a prebuilt host compiler with a separately built target std.
-	  This is slower but uses the normal Rust bootstrap build and OpenWrt's
-	  hash-verified source download. If this option is disabled, building
-	  Rust for a target without a compatible prebuilt std will fail with an
-	  explanation.
+	  If no compatible prebuilt target standard library is available, keep
+	  the prebuilt host compiler and build only the target standard library
+	  from the matching, pinned Rust source component. Cargo dependencies
+	  are downloaded through OpenWrt's hash-verifying download infrastructure
+	  during preparation; the std build itself runs offline. If disabled,
+	  the complete Rust toolchain is built from source instead.
 
 endmenu

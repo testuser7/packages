@@ -35,22 +35,18 @@ ifeq ($(ARCH),powerpc)
   endif
 endif
 
-ifeq ($(CONFIG_RUST_USE_PREBUILT_STD),y)
-  ifeq ($(strip $(RUST_BIN_SUM)),)
-    RUST_STD_SUM:=
-  else
-    ifeq ($(strip $(RUST_STD_SUM)),)
-      ifneq ($(CONFIG_RUST_BUILD_STD_FROM_SOURCE),y)
-        RUST_STD_UNAVAILABLE:=y
-      else
-        $(warning rust: No prebuilt std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; building the Rust toolchain from source as configured)
-        RUST_BIN_SUM:=
-      endif
-    endif
-  endif
-else
-  RUST_BIN_SUM:=
+ifeq ($(strip $(RUST_BIN_SUM)),)
   RUST_STD_SUM:=
+else
+  ifeq ($(strip $(RUST_STD_SUM)),)
+  ifeq ($(CONFIG_RUST_BUILD_STD_ONLY_WITH_PREBUILT_BINARIES),y)
+    $(warning rust: No prebuilt std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; building target std from source as configured)
+    RUST_BUILD_STD_ONLY:=y
+  else
+    $(warning rust: No prebuilt std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; building the complete Rust toolchain from source)
+    RUST_BIN_SUM:=
+  endif
+  endif
 endif
 
 # Source build configuration (must be set before host-build.mk)
@@ -68,6 +64,10 @@ else
   PKG_BUILD_DIR:=$(BUILD_DIR_HOST)/rustc-$(PKG_VERSION)-src
   HOST_BUILD_DIR:=$(BUILD_DIR_HOST)/rustc-$(PKG_VERSION)-src
   HOST_BUILD_DEPENDS:=python3/host
+endif
+
+ifeq ($(RUST_BUILD_STD_ONLY),y)
+  HOST_BUILD_DEPENDS+=python3/host
 endif
 
 include $(INCLUDE_DIR)/host-build.mk
@@ -119,15 +119,23 @@ TARGET_CONFIGURE_ARGS = \
 	$(if $(CONFIG_USE_MUSL),--set=target.$(RUSTC_TARGET_ARCH).musl-root=$(TOOLCHAIN_ROOT_DIR))
 
 define Host/Prepare
-	@if [ "$(RUST_STD_UNAVAILABLE)" = y ]; then \
-		echo "rust: No prebuilt target std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; enable CONFIG_RUST_BUILD_STD_FROM_SOURCE to build the Rust toolchain from source" >&2; \
-		exit 1; \
-	fi
 	$(call Host/Prepare/Default)
 	$(if $(RUST_BIN_SUM),
 		$(Q) MKHASH="$(MKHASH)" $(SCRIPT_DIR)/download.pl "$(DL_DIR)" \
 			"rust-std-$(PKG_VERSION)-$(RUSTC_TARGET_ARCH).tar.xz" "$(RUST_STD_SUM)" "" \
 			"https://static.rust-lang.org/dist/"
+	)
+	$(if $(RUST_BUILD_STD_ONLY),
+		$(Q) MKHASH="$(MKHASH)" $(SCRIPT_DIR)/download.pl "$(DL_DIR)" \
+			"rust-src-$(PKG_VERSION).tar.xz" "$(RUST_SRC_COMPONENT_SUM)" "" \
+			"https://static.rust-lang.org/dist/"
+		$(Q) $(PYTHON) $(SOURCE)/build-std-helper/prepare-vendor.py \
+			--source "$(DL_DIR)/rust-src-$(PKG_VERSION).tar.xz" \
+			--download-dir "$(DL_DIR)" \
+			--download-script "$(SCRIPT_DIR)/download.pl" \
+			--mkhash "$(MKHASH)" \
+			--vendor-dir "$(HOST_BUILD_DIR)/build-std/vendor" \
+			--cargo-home "$(HOST_BUILD_DIR)/build-std/cargo-home"
 	)
 endef
 
@@ -167,6 +175,8 @@ ifneq ($(RUST_BIN_SUM),)
 
 # Prebuilt binary tarball has no configure script or Makefile, so we
 # override the default host build steps with no-ops.
+RUST_HOST_COMPONENTS:=rustc,cargo,rust-std-$(RUSTC_HOST_ARCH)
+
 define Host/Patch
 	@:
 endef
@@ -184,8 +194,8 @@ define Host/Install
 	$(BASH) $(HOST_BUILD_DIR)/install.sh \
 		$(RUST_HOST_INSTALL_ARGS) \
 		--disable-ldconfig \
-		--components=rustc,cargo,rust-std-$(RUSTC_HOST_ARCH)
-	$(call Rust/Install/Std/Prebuilt)
+		--components=$(RUST_HOST_COMPONENTS)
+	$(if $(RUST_BUILD_STD_ONLY),$(call Rust/Install/Std/Source),$(call Rust/Install/Std/Prebuilt))
 	$(call Rust/Validate/Std)
 endef
 
@@ -197,6 +207,35 @@ define Rust/Install/Std/Prebuilt
 		--disable-ldconfig \
 		--components=rust-std-$(RUSTC_TARGET_ARCH)
 	rm -rf $(HOST_BUILD_DIR)/std-$(RUSTC_TARGET_ARCH)
+endef
+
+define Rust/Install/RustSrc
+	$(INSTALL_DIR) $(HOST_BUILD_DIR)/rust-src
+	$(HOST_TAR) -xf "$(DL_DIR)/rust-src-$(PKG_VERSION).tar.xz" -C "$(HOST_BUILD_DIR)/rust-src" --strip-components=1
+	$(BASH) "$(HOST_BUILD_DIR)/rust-src/install.sh" \
+		$(RUST_HOST_INSTALL_ARGS) \
+		--disable-ldconfig \
+		--components=rust-src
+	rm -rf $(HOST_BUILD_DIR)/rust-src
+endef
+
+define Rust/Install/Std/Source
+	$(call Rust/Install/RustSrc)
+	PATH="$(STAGING_DIR)/host/bin:$(PATH)" \
+	RUSTC_BOOTSTRAP=1 \
+	CARGO_BOOTSTRAP=1 \
+	CARGO_HOME="$(HOST_BUILD_DIR)/build-std/cargo-home" \
+	CARGO_NET_OFFLINE=true \
+	CARGO_BUILD_TARGET="$(RUSTC_TARGET_ARCH)" \
+	CARGO_TARGET_$(RUSTC_TARGET_UPPER)_LINKER="$(TARGET_CC_NOCACHE)" \
+	CARGO_TARGET_$(RUSTC_TARGET_UPPER)_RUSTFLAGS="$(CARGO_RUSTFLAGS)$(if $(CONFIG_USE_MUSL), -C link-arg=--sysroot=$(TOOLCHAIN_ROOT_DIR))" \
+	TARGET_CC="$(TARGET_CC_NOCACHE)" \
+	TARGET_AR="$(TARGET_AR)" \
+	TARGET_CFLAGS="$(TARGET_CFLAGS)" \
+	$(BASH) $(SOURCE)/build-std-helper/build-std.sh \
+		"$(RUSTC_TARGET_ARCH)" \
+		"$(HOST_BUILD_DIR)/build-std" \
+		"$(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib"
 endef
 
 else
