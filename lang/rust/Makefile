@@ -123,7 +123,7 @@ TARGET_CONFIGURE_ARGS = \
 
 define Host/Prepare
 	$(call Host/Prepare/Default)
-	$(if $(RUST_BIN_SUM),
+	$(if $(RUST_STD_SUM),
 		$(Q) MKHASH="$(MKHASH)" $(SCRIPT_DIR)/download.pl "$(DL_DIR)" \
 			"rust-std-$(PKG_VERSION)-$(RUSTC_TARGET_ARCH).tar.xz" "$(RUST_STD_SUM)" "" \
 			"https://static.rust-lang.org/dist/"
