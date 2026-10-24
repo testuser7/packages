@@ -20,15 +20,20 @@ include ./rust-values.mk
 
 ifeq ($(CONFIG_RUST_USE_PREBUILT_BINARIES),y)
   ifeq ($(strip $(RUST_BIN_SUM)),)
-    $(error rust: No prebuilt host binary hash defined for RUSTC_HOST_ARCH='$(RUSTC_HOST_ARCH)'; refusing to silently fall back to a full source build)
+    $(error rust: No prebuilt host binary hash for RUSTC_HOST_ARCH='$(RUSTC_HOST_ARCH)'; \
+      enable only for supported hosts or set CONFIG_RUST_USE_PREBUILT_BINARIES=n)
   endif
 else
   RUST_BIN_SUM:=
 endif
 
 ifeq ($(CONFIG_RUST_USE_PREBUILT_STD),y)
+  ifeq ($(strip $(RUST_BIN_SUM)),)
+    $(error rust: Prebuilt target std requires prebuilt host binaries (CONFIG_RUST_USE_PREBUILT_BINARIES))
+  endif
   ifeq ($(strip $(RUST_STD_SUM)),)
-    $(warning rust: No prebuilt target std hash defined for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)', falling back to building from source)
+    $(error rust: No prebuilt target std hash for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; \
+      install a prebuilt std or set CONFIG_RUST_USE_PREBUILT_STD=n)
   endif
 else
   RUST_STD_SUM:=
@@ -140,7 +145,7 @@ define Host/Install
 	$(BASH) $(HOST_BUILD_DIR)/install.sh \
 		$(RUST_HOST_INSTALL_ARGS) \
 		--disable-ldconfig \
-		--components=rustc,cargo,rust-std-$(RUSTC_HOST_ARCH),llvm-tools-preview
+		--components=rustc,cargo,rust-std-$(RUSTC_HOST_ARCH)
 	$(if $(RUST_STD_SUM),$(call Rust/Install/Std/Prebuilt),$(call Rust/Install/Std/Source))
 endef
 
@@ -174,24 +179,33 @@ define Rust/Install/Std/Source
 # is shipped under $(SOURCE)/build-std-helper and copied in here.
 	rm -rf $(HOST_BUILD_DIR)/build-std
 	$(CP) $(SOURCE)/build-std-helper $(HOST_BUILD_DIR)/build-std
-	cd $(HOST_BUILD_DIR)/build-std && \
+		cd $(HOST_BUILD_DIR)/build-std && \
 		PATH="$(STAGING_DIR)/host/bin:$(PATH)" \
 		RUSTC_BOOTSTRAP=1 \
+		CARGO_BOOTSTRAP=1 \
 		CARGO_HOME=$(CARGO_HOME) \
+		CARGO_NET_OFFLINE=true \
 		CARGO_BUILD_TARGET=$(RUSTC_TARGET_ARCH) \
 		CARGO_TARGET_$(call toupper,$(subst -,_,$(RUSTC_TARGET_ARCH)))_LINKER=$(TARGET_CC_NOCACHE) \
 		CARGO_TARGET_$(call toupper,$(subst -,_,$(RUSTC_TARGET_ARCH)))_RUSTFLAGS="$(CARGO_RUSTFLAGS)$(if $(CONFIG_USE_MUSL), -C link-arg=--sysroot=$(TOOLCHAIN_ROOT_DIR))" \
 		$(STAGING_DIR)/host/bin/cargo build \
+			--offline \
 			-Z build-std=core,alloc,std \
 			--lib --target $(RUSTC_TARGET_ARCH) --release
 # Install the freshly built std into the sysroot. Any stale std for this target
 # was already removed by the rm in Host/Install, so INSTALL_DIR recreates a clean dir.
 	$(INSTALL_DIR) $(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib
-	$(CP) $(HOST_BUILD_DIR)/build-std/target/$(RUSTC_TARGET_ARCH)/release/deps/*.rlib \
-		$(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib/
-	$(CP) $(HOST_BUILD_DIR)/build-std/target/$(RUSTC_TARGET_ARCH)/release/deps/*.rmeta \
-		$(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib/
-	rm -f $(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib/build_std_helper-*
+	find $(HOST_BUILD_DIR)/build-std/target/$(RUSTC_TARGET_ARCH)/release/deps \
+		\( -name 'libcore-*.rlib' -o -name 'libcore-*.rmeta' \
+		-o -name 'liballoc-*.rlib' -o -name 'liballoc-*.rmeta' \
+		-o -name 'libstd-*.rlib' -o -name 'libstd-*.rmeta' \
+		-o -name 'libcompiler_builtins-*.rlib' -o -name 'libcompiler_builtins-*.rmeta' \
+		-o -name 'libpanic_unwind-*.rlib' -o -name 'libpanic_unwind-*.rmeta' \
+		-o -name 'libpanic_abort-*.rlib' -o -name 'libpanic_abort-*.rmeta' \
+		-o -name 'libstd_detect-*.rlib' -o -name 'libstd_detect-*.rmeta' \
+		-o -name 'libtest-*.rlib' -o -name 'libtest-*.rmeta' \
+		-o -name 'libprofiler_builtins-*.rlib' -o -name 'libprofiler_builtins-*.rmeta' \) \
+		-exec cp {} $(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib/ \;
 endef
 
 else
