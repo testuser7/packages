@@ -7,6 +7,8 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=rust
 PKG_VERSION:=1.96.0
 PKG_RELEASE:=2
+RUST_SRC_FILE:=rustc-$(PKG_VERSION)-src.tar.xz
+RUST_SRC_URL:=https://static.rust-lang.org/dist/
 
 PKG_MAINTAINER:=Luca Barbato <lu_zero@luminem.org>
 PKG_LICENSE:=Apache-2.0 MIT
@@ -27,13 +29,25 @@ else
   RUST_BIN_SUM:=
 endif
 
+# The Rust target triple does not distinguish PowerPC soft-float from
+# hard-float, so the upstream prebuilt std may have the wrong ABI.
+ifeq ($(ARCH),powerpc)
+  ifeq ($(CONFIG_SOFT_FLOAT),y)
+    RUST_STD_SUM:=
+  endif
+endif
+
 ifeq ($(CONFIG_RUST_USE_PREBUILT_STD),y)
   ifeq ($(strip $(RUST_BIN_SUM)),)
-    $(error rust: Prebuilt target std requires prebuilt host binaries (CONFIG_RUST_USE_PREBUILT_BINARIES))
-  endif
-  ifeq ($(strip $(RUST_STD_SUM)),)
-    $(error rust: No prebuilt target std hash for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; \
-      install a prebuilt std or set CONFIG_RUST_USE_PREBUILT_STD=n)
+    RUST_STD_SUM:=
+  else
+    ifeq ($(strip $(RUST_STD_SUM)),)
+      ifneq ($(CONFIG_RUST_BUILD_STD_FROM_SOURCE),y)
+        $(error rust: No prebuilt target std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; \
+          enable CONFIG_RUST_BUILD_STD_FROM_SOURCE to build it from source)
+      endif
+      $(warning rust: No prebuilt std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; building std from source as configured)
+    endif
   endif
 else
   RUST_STD_SUM:=
@@ -48,8 +62,8 @@ ifneq ($(RUST_BIN_SUM),)
   HOST_BUILD_DIR:=$(BUILD_DIR_HOST)/rust-$(PKG_VERSION)-$(RUSTC_HOST_ARCH)
   HOST_BUILD_DEPENDS:=
 else
-  PKG_SOURCE:=rustc-$(PKG_VERSION)-src.tar.xz
-  PKG_SOURCE_URL:=https://static.rust-lang.org/dist/
+  PKG_SOURCE:=$(RUST_SRC_FILE)
+  PKG_SOURCE_URL:=$(RUST_SRC_URL)
   PKG_HASH:=$(RUST_SRC_HASH)
   PKG_BUILD_DIR:=$(BUILD_DIR_HOST)/rustc-$(PKG_VERSION)-src
   HOST_BUILD_DIR:=$(BUILD_DIR_HOST)/rustc-$(PKG_VERSION)-src
@@ -113,8 +127,7 @@ define Host/Prepare
 				"https://static.rust-lang.org/dist/"
 		,
 			$(Q) MKHASH="$(MKHASH)" $(SCRIPT_DIR)/download.pl "$(DL_DIR)" \
-				"rustc-$(PKG_VERSION)-src.tar.xz" "$(RUST_SRC_HASH)" "" \
-				"https://static.rust-lang.org/dist/"
+				"$(RUST_SRC_FILE)" "$(RUST_SRC_HASH)" "" "$(RUST_SRC_URL)"
 		)
 	)
 endef
@@ -147,6 +160,34 @@ define Host/Install
 		--disable-ldconfig \
 		--components=rustc,cargo,rust-std-$(RUSTC_HOST_ARCH)
 	$(if $(RUST_STD_SUM),$(call Rust/Install/Std/Prebuilt),$(call Rust/Install/Std/Source))
+	$(call Rust/Validate/Std)
+endef
+
+define Rust/Validate/Std
+	@set -eu; \
+		libdir="$(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib"; \
+		for crate in core alloc std compiler_builtins; do \
+			set -- "$$libdir"/lib$$crate-*.rlib; \
+			if [ ! -f "$$1" ]; then \
+				echo "rust: missing target std artifact lib$$crate-*.rlib in $$libdir" >&2; \
+				exit 1; \
+			fi; \
+		done; \
+		for crate in core alloc std; do \
+			set -- "$$libdir"/lib$$crate-*.rmeta; \
+			if [ ! -f "$$1" ]; then \
+				echo "rust: missing target std metadata lib$$crate-*.rmeta in $$libdir" >&2; \
+				exit 1; \
+			fi; \
+		done; \
+		set -- "$$libdir"/libpanic_unwind-*.rlib; \
+		if [ ! -f "$$1" ]; then \
+			set -- "$$libdir"/libpanic_abort-*.rlib; \
+			if [ ! -f "$$1" ]; then \
+				echo "rust: missing target panic runtime (libpanic_unwind or libpanic_abort) in $$libdir" >&2; \
+				exit 1; \
+			fi; \
+		fi
 endef
 
 define Rust/Install/Std/Prebuilt
@@ -168,44 +209,22 @@ endef
 # `cargo build` of library/std hits. The built rlibs are installed into the
 # sysroot so downstream crates use them like a normal prebuilt std.
 define Rust/Install/Std/Source
-	$(INSTALL_DIR) $(HOST_BUILD_DIR)/src
-	$(HOST_TAR) -xf "$(DL_DIR)/rustc-$(PKG_VERSION)-src.tar.xz" -C "$(HOST_BUILD_DIR)/src" --strip-components=1
-	$(INSTALL_DIR) $(STAGING_DIR)/host/lib/rustlib/src/rust
-	rm -rf $(STAGING_DIR)/host/lib/rustlib/src/rust/library
-	$(CP) $(HOST_BUILD_DIR)/src/library $(STAGING_DIR)/host/lib/rustlib/src/rust/library
-# Build the target std once via -Z build-std using a throwaway lib crate. Using a
-# lib crate (not a binary) avoids the final executable link step, so no C
-# runtime objects are required just to produce the std rlibs. The crate itself
-# is shipped under $(SOURCE)/build-std-helper and copied in here.
-	rm -rf $(HOST_BUILD_DIR)/build-std
-	$(CP) $(SOURCE)/build-std-helper $(HOST_BUILD_DIR)/build-std
-		cd $(HOST_BUILD_DIR)/build-std && \
-		PATH="$(STAGING_DIR)/host/bin:$(PATH)" \
-		RUSTC_BOOTSTRAP=1 \
-		CARGO_BOOTSTRAP=1 \
-		CARGO_HOME=$(CARGO_HOME) \
-		CARGO_NET_OFFLINE=true \
-		CARGO_BUILD_TARGET=$(RUSTC_TARGET_ARCH) \
-		CARGO_TARGET_$(call toupper,$(subst -,_,$(RUSTC_TARGET_ARCH)))_LINKER=$(TARGET_CC_NOCACHE) \
-		CARGO_TARGET_$(call toupper,$(subst -,_,$(RUSTC_TARGET_ARCH)))_RUSTFLAGS="$(CARGO_RUSTFLAGS)$(if $(CONFIG_USE_MUSL), -C link-arg=--sysroot=$(TOOLCHAIN_ROOT_DIR))" \
-		$(STAGING_DIR)/host/bin/cargo build \
-			--offline \
-			-Z build-std=core,alloc,std \
-			--lib --target $(RUSTC_TARGET_ARCH) --release
-# Install the freshly built std into the sysroot. Any stale std for this target
-# was already removed by the rm in Host/Install, so INSTALL_DIR recreates a clean dir.
-	$(INSTALL_DIR) $(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib
-	find $(HOST_BUILD_DIR)/build-std/target/$(RUSTC_TARGET_ARCH)/release/deps \
-		\( -name 'libcore-*.rlib' -o -name 'libcore-*.rmeta' \
-		-o -name 'liballoc-*.rlib' -o -name 'liballoc-*.rmeta' \
-		-o -name 'libstd-*.rlib' -o -name 'libstd-*.rmeta' \
-		-o -name 'libcompiler_builtins-*.rlib' -o -name 'libcompiler_builtins-*.rmeta' \
-		-o -name 'libpanic_unwind-*.rlib' -o -name 'libpanic_unwind-*.rmeta' \
-		-o -name 'libpanic_abort-*.rlib' -o -name 'libpanic_abort-*.rmeta' \
-		-o -name 'libstd_detect-*.rlib' -o -name 'libstd_detect-*.rmeta' \
-		-o -name 'libtest-*.rlib' -o -name 'libtest-*.rmeta' \
-		-o -name 'libprofiler_builtins-*.rlib' -o -name 'libprofiler_builtins-*.rmeta' \) \
-		-exec cp {} $(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib/ \;
+	PATH="$(STAGING_DIR)/host/bin:$(PATH)" \
+	RUSTC_BOOTSTRAP=1 \
+	CARGO_BOOTSTRAP=1 \
+	RUST_SRC_ARCHIVE="$(DL_DIR)/$(RUST_SRC_FILE)" \
+	RUST_STD_WORK_DIR="$(HOST_BUILD_DIR)/build-std" \
+	RUST_STD_LIB_DIR="$(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib" \
+	RUST_STD_SRC_INSTALL_DIR="$(STAGING_DIR)/host/lib/rustlib/src/rust" \
+	RUST_STD_TARGET="$(RUSTC_TARGET_ARCH)" \
+	RUST_STD_CARGO="$(STAGING_DIR)/host/bin/cargo" \
+	RUST_STD_CARGO_HOME="$(HOST_BUILD_DIR)/cargo-home" \
+	RUST_STD_TAR="$(HOST_TAR)" \
+	RUST_STD_LINKER="$(TARGET_CC_NOCACHE)" \
+	RUST_STD_RUSTFLAGS="$(CARGO_RUSTFLAGS)$(if $(CONFIG_USE_MUSL), -C link-arg=--sysroot=$(TOOLCHAIN_ROOT_DIR))" \
+	CARGO_TARGET_$(call toupper,$(subst -,_,$(RUSTC_TARGET_ARCH)))_LINKER="$(TARGET_CC_NOCACHE)" \
+	CARGO_TARGET_$(call toupper,$(subst -,_,$(RUSTC_TARGET_ARCH)))_RUSTFLAGS="$(CARGO_RUSTFLAGS)$(if $(CONFIG_USE_MUSL), -C link-arg=--sysroot=$(TOOLCHAIN_ROOT_DIR))" \
+	$(BASH) $(SOURCE)/build-std-helper/build-std.sh
 endef
 
 else
