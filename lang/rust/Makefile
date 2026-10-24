@@ -2,6 +2,8 @@
 #
 # Copyright (C) 2023 Luca Barbato and Donald Hoskins
 
+RUST_PACKAGE_DIR:=$(abspath $(dir $(firstword $(MAKEFILE_LIST))))
+
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=rust
@@ -132,7 +134,7 @@ define Host/Prepare
 		$(Q) MKHASH="$(MKHASH)" $(SCRIPT_DIR)/download.pl "$(DL_DIR)" \
 			"rust-src-$(PKG_VERSION).tar.xz" "$(RUST_SRC_COMPONENT_SUM)" "" \
 			"https://static.rust-lang.org/dist/"
-		$(Q) $(PYTHON) $(SOURCE)/build-std-helper/prepare-vendor.py \
+		$(Q) $(PYTHON) $(RUST_PACKAGE_DIR)/build-std-helper/prepare-vendor.py \
 			--source "$(DL_DIR)/rust-src-$(PKG_VERSION).tar.xz" \
 			--download-dir "$(DL_DIR)" \
 			--download-script "$(SCRIPT_DIR)/download.pl" \
@@ -235,7 +237,7 @@ define Rust/Install/Std/Source
 	TARGET_CC="$(TARGET_CC_NOCACHE)" \
 	TARGET_AR="$(TARGET_AR)" \
 	TARGET_CFLAGS="$(TARGET_CFLAGS)" \
-	$(BASH) $(SOURCE)/build-std-helper/build-std.sh \
+	$(BASH) $(RUST_PACKAGE_DIR)/build-std-helper/build-std.sh \
 		"$(RUSTC_TARGET_ARCH)" \
 		"$(HOST_BUILD_DIR)/build-std" \
 		"$(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib"
