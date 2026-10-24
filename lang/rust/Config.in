@@ -31,21 +31,19 @@ config RUST_USE_PREBUILT_STD
 	  Use official prebuilt rust-std binaries for the target toolchain on
 	  supported platforms and ABI configurations. The target triple is
 	  auto-detected from the OpenWrt target configuration. Disable this
-	  option to always build the target std from source.
+	  option to build the Rust toolchain from source.
 
 config RUST_BUILD_STD_FROM_SOURCE
-	bool "Build target Rust standard library from source when no prebuilt is available"
+	bool "Build Rust toolchain from source if prebuilt target std is unavailable"
 	default n
 	depends on RUST_USE_PREBUILT_BINARIES && RUST_USE_PREBUILT_STD
 	help
 	  If no compatible prebuilt target standard library is available, build
-	  it from source via cargo -Z build-std. This can significantly increase
-	  build time and requires target-toolchain support and network access to
-	  fetch the Cargo dependencies into an isolated Rust-package cache.
-	  The implementation uses RUSTC_BOOTSTRAP=1 and CARGO_BOOTSTRAP=1 with
-	  the pinned stable toolchain; these are unsupported internal interfaces
-	  and must be revalidated when updating Rust. If disabled, building Rust
-	  for a target without a compatible prebuilt std will fail with an
+	  the complete Rust toolchain from the pinned source archive instead of
+	  mixing a prebuilt host compiler with a separately built target std.
+	  This is slower but uses the normal Rust bootstrap build and OpenWrt's
+	  hash-verified source download. If this option is disabled, building
+	  Rust for a target without a compatible prebuilt std will fail with an
 	  explanation.
 
 endmenu

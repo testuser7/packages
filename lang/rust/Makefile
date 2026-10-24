@@ -7,8 +7,6 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=rust
 PKG_VERSION:=1.96.0
 PKG_RELEASE:=2
-RUST_SRC_FILE:=rustc-$(PKG_VERSION)-src.tar.xz
-RUST_SRC_URL:=https://static.rust-lang.org/dist/
 
 PKG_MAINTAINER:=Luca Barbato <lu_zero@luminem.org>
 PKG_LICENSE:=Apache-2.0 MIT
@@ -43,13 +41,15 @@ ifeq ($(CONFIG_RUST_USE_PREBUILT_STD),y)
   else
     ifeq ($(strip $(RUST_STD_SUM)),)
       ifneq ($(CONFIG_RUST_BUILD_STD_FROM_SOURCE),y)
-        $(error rust: No prebuilt target std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; \
-          enable CONFIG_RUST_BUILD_STD_FROM_SOURCE to build it from source)
+        RUST_STD_UNAVAILABLE:=y
+      else
+        $(warning rust: No prebuilt std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; building the Rust toolchain from source as configured)
+        RUST_BIN_SUM:=
       endif
-      $(warning rust: No prebuilt std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; building std from source as configured)
     endif
   endif
 else
+  RUST_BIN_SUM:=
   RUST_STD_SUM:=
 endif
 
@@ -62,8 +62,8 @@ ifneq ($(RUST_BIN_SUM),)
   HOST_BUILD_DIR:=$(BUILD_DIR_HOST)/rust-$(PKG_VERSION)-$(RUSTC_HOST_ARCH)
   HOST_BUILD_DEPENDS:=
 else
-  PKG_SOURCE:=$(RUST_SRC_FILE)
-  PKG_SOURCE_URL:=$(RUST_SRC_URL)
+  PKG_SOURCE:=rustc-$(PKG_VERSION)-src.tar.xz
+  PKG_SOURCE_URL:=https://static.rust-lang.org/dist/
   PKG_HASH:=$(RUST_SRC_HASH)
   PKG_BUILD_DIR:=$(BUILD_DIR_HOST)/rustc-$(PKG_VERSION)-src
   HOST_BUILD_DIR:=$(BUILD_DIR_HOST)/rustc-$(PKG_VERSION)-src
@@ -119,48 +119,21 @@ TARGET_CONFIGURE_ARGS = \
 	$(if $(CONFIG_USE_MUSL),--set=target.$(RUSTC_TARGET_ARCH).musl-root=$(TOOLCHAIN_ROOT_DIR))
 
 define Host/Prepare
+	@if [ "$(RUST_STD_UNAVAILABLE)" = y ]; then \
+		echo "rust: No prebuilt target std for RUSTC_TARGET_ARCH='$(RUSTC_TARGET_ARCH)'; enable CONFIG_RUST_BUILD_STD_FROM_SOURCE to build the Rust toolchain from source" >&2; \
+		exit 1; \
+	fi
 	$(call Host/Prepare/Default)
 	$(if $(RUST_BIN_SUM),
-		$(if $(RUST_STD_SUM),
-			$(Q) MKHASH="$(MKHASH)" $(SCRIPT_DIR)/download.pl "$(DL_DIR)" \
-				"rust-std-$(PKG_VERSION)-$(RUSTC_TARGET_ARCH).tar.xz" "$(RUST_STD_SUM)" "" \
-				"https://static.rust-lang.org/dist/"
-		,
-			$(Q) MKHASH="$(MKHASH)" $(SCRIPT_DIR)/download.pl "$(DL_DIR)" \
-				"$(RUST_SRC_FILE)" "$(RUST_SRC_HASH)" "" "$(RUST_SRC_URL)"
-		)
+		$(Q) MKHASH="$(MKHASH)" $(SCRIPT_DIR)/download.pl "$(DL_DIR)" \
+			"rust-std-$(PKG_VERSION)-$(RUSTC_TARGET_ARCH).tar.xz" "$(RUST_STD_SUM)" "" \
+			"https://static.rust-lang.org/dist/"
 	)
 endef
 
 define Host/Uninstall
 	[ -f $(RUST_UNINSTALL) ] && \
 		$(BASH) $(RUST_UNINSTALL) || echo No Uninstall
-endef
-
-ifneq ($(RUST_BIN_SUM),)
-
-# Prebuilt binary tarball has no configure script or Makefile, so we
-# override the default host build steps with no-ops.
-define Host/Patch
-	@:
-endef
-
-define Host/Configure
-	@:
-endef
-
-define Host/Compile
-	@:
-endef
-
-define Host/Install
-	rm -rf $(STAGING_DIR)/host/lib/rustlib
-	$(BASH) $(HOST_BUILD_DIR)/install.sh \
-		$(RUST_HOST_INSTALL_ARGS) \
-		--disable-ldconfig \
-		--components=rustc,cargo,rust-std-$(RUSTC_HOST_ARCH)
-	$(if $(RUST_STD_SUM),$(call Rust/Install/Std/Prebuilt),$(call Rust/Install/Std/Source))
-	$(call Rust/Validate/Std)
 endef
 
 define Rust/Validate/Std
@@ -190,6 +163,32 @@ define Rust/Validate/Std
 		fi
 endef
 
+ifneq ($(RUST_BIN_SUM),)
+
+# Prebuilt binary tarball has no configure script or Makefile, so we
+# override the default host build steps with no-ops.
+define Host/Patch
+	@:
+endef
+
+define Host/Configure
+	@:
+endef
+
+define Host/Compile
+	@:
+endef
+
+define Host/Install
+	rm -rf $(STAGING_DIR)/host/lib/rustlib
+	$(BASH) $(HOST_BUILD_DIR)/install.sh \
+		$(RUST_HOST_INSTALL_ARGS) \
+		--disable-ldconfig \
+		--components=rustc,cargo,rust-std-$(RUSTC_HOST_ARCH)
+	$(call Rust/Install/Std/Prebuilt)
+	$(call Rust/Validate/Std)
+endef
+
 define Rust/Install/Std/Prebuilt
 	$(INSTALL_DIR) $(HOST_BUILD_DIR)/std-$(RUSTC_TARGET_ARCH)
 	$(HOST_TAR) -xf "$(DL_DIR)/rust-std-$(PKG_VERSION)-$(RUSTC_TARGET_ARCH).tar.xz" -C "$(HOST_BUILD_DIR)/std-$(RUSTC_TARGET_ARCH)" --strip-components=1
@@ -198,33 +197,6 @@ define Rust/Install/Std/Prebuilt
 		--disable-ldconfig \
 		--components=rust-std-$(RUSTC_TARGET_ARCH)
 	rm -rf $(HOST_BUILD_DIR)/std-$(RUSTC_TARGET_ARCH)
-endef
-
-# Prebuilt rustc/cargo with no prebuilt target std: build the standard library
-# for the cross target once here, using cargo's `-Z build-std` against the rust
-# source we lay into the sysroot. `-Z build-std` compiles std with the *prebuilt*
-# rustc and uses the std-private dependency pins from the rust source, so the
-# resulting rlibs carry the same rustc version identity as the installed
-# compiler (no E0514) and avoid the hashbrown const-stability error that a plain
-# `cargo build` of library/std hits. The built rlibs are installed into the
-# sysroot so downstream crates use them like a normal prebuilt std.
-define Rust/Install/Std/Source
-	PATH="$(STAGING_DIR)/host/bin:$(PATH)" \
-	RUSTC_BOOTSTRAP=1 \
-	CARGO_BOOTSTRAP=1 \
-	RUST_SRC_ARCHIVE="$(DL_DIR)/$(RUST_SRC_FILE)" \
-	RUST_STD_WORK_DIR="$(HOST_BUILD_DIR)/build-std" \
-	RUST_STD_LIB_DIR="$(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib" \
-	RUST_STD_SRC_INSTALL_DIR="$(STAGING_DIR)/host/lib/rustlib/src/rust" \
-	RUST_STD_TARGET="$(RUSTC_TARGET_ARCH)" \
-	RUST_STD_CARGO="$(STAGING_DIR)/host/bin/cargo" \
-	RUST_STD_CARGO_HOME="$(HOST_BUILD_DIR)/cargo-home" \
-	RUST_STD_TAR="$(HOST_TAR)" \
-	RUST_STD_LINKER="$(TARGET_CC_NOCACHE)" \
-	RUST_STD_RUSTFLAGS="$(CARGO_RUSTFLAGS)$(if $(CONFIG_USE_MUSL), -C link-arg=--sysroot=$(TOOLCHAIN_ROOT_DIR))" \
-	CARGO_TARGET_$(call toupper,$(subst -,_,$(RUSTC_TARGET_ARCH)))_LINKER="$(TARGET_CC_NOCACHE)" \
-	CARGO_TARGET_$(call toupper,$(subst -,_,$(RUSTC_TARGET_ARCH)))_RUSTFLAGS="$(CARGO_RUSTFLAGS)$(if $(CONFIG_USE_MUSL), -C link-arg=--sysroot=$(TOOLCHAIN_ROOT_DIR))" \
-	$(BASH) $(SOURCE)/build-std-helper/build-std.sh
 endef
 
 else
@@ -257,6 +229,7 @@ define Host/Compile
 endef
 
 define Host/Install
+	rm -rf $(STAGING_DIR)/host/lib/rustlib
 	( \
 		cd $(HOST_BUILD_DIR)/build/dist ; \
 		for targz in *.tar.gz; do \
@@ -265,6 +238,7 @@ define Host/Install
 		find . -mindepth 2 -maxdepth 2 -type f -name install.sh \
 			-execdir bash '{}' --prefix=$(STAGING_DIR)/host --disable-ldconfig \; ; \
 	)
+	$(call Rust/Validate/Std)
 endef
 
 endif
