@@ -140,24 +140,24 @@ define Rust/Validate/Std
 	@set -eu; \
 		libdir="$(STAGING_DIR)/host/lib/rustlib/$(RUSTC_TARGET_ARCH)/lib"; \
 		for crate in core alloc std compiler_builtins; do \
-			set -- "$$libdir"/lib$$crate-*.rlib; \
-			if [ ! -f "$$1" ]; then \
-				echo "rust: missing target std artifact lib$$crate-*.rlib in $$libdir" >&2; \
+			set -- "$$$$libdir"/lib$$$$crate-*.rlib; \
+			if [ ! -f "$$$$1" ]; then \
+				echo "rust: missing target std artifact lib$$$$crate-*.rlib in $$$$libdir" >&2; \
 				exit 1; \
 			fi; \
 		done; \
 		for crate in core alloc std; do \
-			set -- "$$libdir"/lib$$crate-*.rmeta; \
-			if [ ! -f "$$1" ]; then \
-				echo "rust: missing target std metadata lib$$crate-*.rmeta in $$libdir" >&2; \
+			set -- "$$$$libdir"/lib$$$$crate-*.rmeta; \
+			if [ ! -f "$$$$1" ]; then \
+				echo "rust: missing target std metadata lib$$$$crate-*.rmeta in $$$$libdir" >&2; \
 				exit 1; \
 			fi; \
 		done; \
-		set -- "$$libdir"/libpanic_unwind-*.rlib; \
-		if [ ! -f "$$1" ]; then \
-			set -- "$$libdir"/libpanic_abort-*.rlib; \
-			if [ ! -f "$$1" ]; then \
-				echo "rust: missing target panic runtime (libpanic_unwind or libpanic_abort) in $$libdir" >&2; \
+		set -- "$$$$libdir"/libpanic_unwind-*.rlib; \
+		if [ ! -f "$$$$1" ]; then \
+			set -- "$$$$libdir"/libpanic_abort-*.rlib; \
+			if [ ! -f "$$$$1" ]; then \
+				echo "rust: missing target panic runtime (libpanic_unwind or libpanic_abort) in $$$$libdir" >&2; \
 				exit 1; \
 			fi; \
 		fi
